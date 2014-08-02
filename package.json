@@ -1,0 +1,25 @@
+{
+  "name": "todo",
+  "version": "0.0.0",
+  "description": "Todo is a utility for developers working with GitHub and Jira for their projects.",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:Ustice/todo.git"
+  },
+  "keywords": [
+    "jira",
+    "github",
+    "developer",
+    "task-manager"
+  ],
+  "author": "Jason Kleinberg",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Ustice/todo/issues"
+  },
+  "homepage": "https://github.com/Ustice/todo"
+}
