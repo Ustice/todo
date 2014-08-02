@@ -21,5 +21,13 @@
   "bugs": {
     "url": "https://github.com/Ustice/todo/issues"
   },
-  "homepage": "https://github.com/Ustice/todo"
+  "homepage": "https://github.com/Ustice/todo",
+  "dependencies": {
+    "commander": "~2.3.0",
+    "bluebird": "~2.2.2",
+    "jira": "~0.10.0",
+    "github": "~0.2.1",
+    "keychain": "0.0.4",
+    "lodash": "~2.4.1"
+  }
 }
