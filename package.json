@@ -2,7 +2,7 @@
   "name": "todo",
   "version": "0.0.0",
   "description": "Todo is a utility for developers working with GitHub and Jira for their projects.",
-  "main": "index.js",
+  "main": "todo",
   "scripts": {
     "test": "mocha test"
   },
@@ -28,6 +28,7 @@
     "jira": "~0.10.0",
     "github": "~0.2.1",
     "keychain": "0.0.4",
-    "lodash": "~2.4.1"
+    "lodash": "~2.4.1",
+    "inquirer": "~0.5.1"
   }
 }
