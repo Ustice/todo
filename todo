@@ -1,33 +1,234 @@
 #!/usr/bin/env node
+'use strict';
 
-var Promise 	= require('bluebird');
-var config 		= require(__dirname + '/config.json');
+var Promise 			= require('bluebird');
+var config 				= require(__dirname + '/config.json');
+var packageConfig = require(__dirname + '/package.json');
+var fs 						= Promise.promisifyAll(require('fs'));
+var git 					= require(__dirname + '/lib/git');
+var inquirer			= Promise.promisifyAll(require('inquirer'));
 
 var exec 			= Promise.promisify(require('child_process').exec);
 var todo 			= require('commander');
 var keychain 	= require(__dirname + '/lib/keychain-promise');
 
+
 var githubKeychain = {
 	account: config.github.login,
 	service: 'github.com',
 	type: 'internet'
-}
+};
 
-keychain.getPassword(githubKeychain).then(function (password) {
-	console.log('Password is %s.', password);
-}).catch(function (error) {
-	console.error(error);
-});
+inquirer.ask = function inquirer$ask (query, def) {
+	return new Promise(function (resolve, reject) {
+		var question = {
+			name: 'prompt',
+			message: query
+		};
+		if (typeof def !== 'undefined') question.default = def;
 
- 
-// executes `pwd`
-exec("git rev-parse --show-toplevel")
-.then(function (repo) {
+		inquirer.prompt(question, function (answers) {
+			resolve(answers.prompt);
+		})
+	});
+};
+
+inquirer.confirm = function inquirer$confirm (query) {
+	return new Promise(function (resolve, reject) {
+		var question = {
+			name: 'confirm',
+			message: query,
+			'default': 'Y'
+		}
+		inquirer.prompt(question, function (answers) {
+			answers.confirm = !!answers.confirm.match(/^(?:y|yes)/i);
+			resolve(answers.confirm);
+		})
+	});
+};
+
+var projectDirectory;
+
+todo
+	.version(packageConfig.version)
+	.description(packageConfig.description)
+;
+
+todo
+	.command('help [command]')
+	.description('Displays help information.')
+	.action(function (command) {
+		console.log(command);
+		todo.outputHelp();
+		process.exit();
+	})
+;
+
+todo
+	.command('init')
+	.description('Initializes the todo command system. This will create the .todo file as well as the todo.config file.')
+	.option('-d, --debug', 'Show debug information.')
+	.action(function (command) {
+		var configData = {
+			git: {},
+			jira: {},
+			slack: {},
+			options: {}
+		};
+
+		if (command.debug) console.log('Debug mode detected.');
+		git.getRootDirectory()
+		.then(function (directory) {
+			if (command.debug) console.log('Project root directory: %s\nChecking for todo.config.', directory);
+			projectDirectory = directory;
+			return fs.readFileAsync(directory + '/todo.config');
+		}).then(function (todoConfig) {
+			if (todoConfig) {
+				if (command.debug) console.log('todo.config found.');
+				// Config file exists.
+				return inquirer.confirm('A todo.config file exists. Are you sure you want to reinitialize?').then(function (yes) {
+					if (yes) {
+						if (command.debug) console.log('Reinitializing.');
+						return true;
+					} else {
+						console.log('Aborting initialization.');
+						process.exit();
+					}
+				});
+			} else {
+				if (command.debug) console.log('todo.config not found.');
+				return true;
+			}
+		}).then(function () {
+			var configFile;
+			if (!projectDirectory) {
+				throw new Error('Unknown project directory.');
+			}
+
+			return inquirer.ask('What is the name of this project? (Press enter to retrieve it from package.json.)');
+		}).then(function (projectName) {
+			configData.projectName = projectName || packageConfig.name;
+
+			if (command.debug) console.log('Using "%s".', configData.projectName);
+			return inquirer.ask('Where is your project git repo located? (Press Enter to load origin.)');
+		}).then(function (location) {
+			if (!location) {
+				return exec('git remote -v').then(function (gitResponse) {
+					var re = /^(?:origin\s*)(\S*)([\n\s]|.)*/;
+					return gitResponse[0].replace(re, '$1');
+				});
+			} else {
+				return location;
+			}
+		}).then(function (githubRepo) {
+			if (command.debug) console.log('Using "%s".', githubRepo);
+			configData.git.repo = githubRepo;
+			return inquirer.ask('What is your email address that is registered with GitHub?');
+		}).then(function (email) {
+			configData.git.account = email;
+
+			return inquirer.ask('What is the name of your development branch?', 'develop');
+		}).then(function (develop) {
+			configData.git.devBranch = develop;
+
+			return inquirer.ask('Where is your JIRA instance running? (You may simply paste in an entire URL.)');
+		}).then(function (url) {
+			configData.jira.domain = url.replace(/^https?:\/\/([^\/]*)\/?.*$/, '$1');
+
+			if (command.debug) console.log('Using "%s".', configData.jira.domain);
+
+			return inquirer.ask('What is the email address that is registered with JIRA? (Press enter if it is the same as GitHub.)');
+		}).then(function (email) {
+			configData.jira.account = email || configData.git.account;
+			return inquirer.ask('What is your Slack team name? (You can find this in the top-left corner of Slack.)');
+		}).then(function (slackTeam) {
+			configData.slack.domain = slackTeam + '.slack.com';
+			return inquirer.ask('What is your Slack username?');
+		}).then(function (username) {
+			configData.slack.account = username;
+			return inquirer.ask(
+				'What is your slack API authentication token? (This will be safely stored in your secure keychain, and not your config file.)\n' +
+				'(Press enter to open the browser to open your browser to where you can find it.)'
+			);
+		}).then(function (token){
+			if (!token) {
+				return exec('open https://api.slack.com/#auth').then(function () {
+					return inquirer.ask('What is your slack API authentication token?');
+				});
+			} else return (token);
+		}).then(function (token) {
+			console.log('Using "%s" as token.', token);
+			var keychainData = {
+				account: configData.slack.account,
+				service: 'todo-' + configData.projectName,
+				password: token
+			};
+			return keychain.setPassword(keychainData);
+		}).then(function () {
+			return inquirer.ask('What slack channel or private group does your team use?');
+		}).then(function (channel) {
+			configData.slack.channel = channel;
+			return inquirer.ask('Would you like to sign the package.json file as a contributor? (Y/n) (Press enter for yes.)');
+		}).then(function (shouldSign) {
+			shouldSign = !shouldSign || !!shouldSign.match(/^\s*(y|yes)\b/i);
+			configData.options.sign = shouldSign;
+			if (shouldSign) configData.signed = false;
+			console.log(configData);
+			return inquirer.ask('Does everything look okay? (Y/n)');
+		}).then(function (okay) {
+			okay = !okay || !!okay.match(/^\s*(y|yes)\b/i);
+			if (!okay) {process.exit();}
+
+			fs.writeFileAsync(projectDirectory + '/todo.config', configData);
+		}).then(function () {
+			console.log('Configuration written successfully.');
+			process.exit();
+		}).catch(function (error) {
+			console.error('Something went wrong, and you will have to try again.').
+			process.exit(1);
+		});
+	});
+;
+
+todo
+	.command('list [orderBy] [users ...]')
+	.description('Lists tasks assigned to you or the specified users.')
+	.option('--all', 				'Lists all tasks in the current sprint.')
+	.option('--available', 	'Lists all unassigned tasks or the tasks that are assigned to the user.')
+	.option('--done', 			'Includes tasks that are complete.')
+	.option('--unassigned', 'Lists all tasks that are unassigned')
+	.action(function () {
+		var args = Array.prototype.slice.call(arguments);
+		var command = args.pop();
+
+		if (command.all) console.log('Listing all tasks.');
+		if (command.available) console.log('Listing all available lists');
+		if (command.done) console.log('Listing all completed tasks');
+		if (command.unassigned) console.log('Listing all unassigned tasks');
 
 
+	})
+;
+
+todo
+.command('github')
+	.action(function (env) {
+
+		keychain.getPassword(githubKeychain).then(function (password) {
+			console.log('Password is %s.', password);
+		}).catch(function (error) {
+			console.error(error);
+		});
+
+		exec("git rev-parse --show-toplevel")
+		.then(function (localRepoPath) {
+
+		}).catch(function (error) {
+			console.error('Unable to locate git repository. todo must be run within a git repo.')
+		});
 
 
+	})
+;
 
-}).catch(function (error) {
-	console.error('Unable to locate git repository. todo must be run within a git repo.')
-});
+todo.parse(process.argv);
