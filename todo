@@ -2,33 +2,27 @@
 'use strict';
 
 var Promise 			= require('bluebird');
-var config 				= require(__dirname + '/config.json');
+var config 				= require(__dirname + '/todo.config');
 var packageConfig = require(__dirname + '/package.json');
 var fs 						= Promise.promisifyAll(require('fs'));
 var git 					= require(__dirname + '/lib/git');
-var inquirer			= Promise.promisifyAll(require('inquirer'));
+var inquirer			= require('inquirer');
 
 var exec 			= Promise.promisify(require('child_process').exec);
 var todo 			= require('commander');
 var keychain 	= require(__dirname + '/lib/keychain-promise');
 
 
-var githubKeychain = {
-	account: config.github.login,
-	service: 'github.com',
-	type: 'internet'
-};
+// var githubKeychain = {
+// 	account: config.github.login,
+// 	service: 'github.com',
+// 	type: 'internet'
+// };
 
-inquirer.ask = function inquirer$ask (query, def) {
+inquirer.promptAsync = function inquirer$promptAsync (questions) {
 	return new Promise(function (resolve, reject) {
-		var question = {
-			name: 'prompt',
-			message: query
-		};
-		if (typeof def !== 'undefined') question.default = def;
-
-		inquirer.prompt(question, function (answers) {
-			resolve(answers.prompt);
+		inquirer.prompt(questions, function (answers) {
+			resolve(answers);
 		})
 	});
 };
@@ -67,16 +61,102 @@ todo
 todo
 	.command('init')
 	.description('Initializes the todo command system. This will create the .todo file as well as the todo.config file.')
-	.option('-d, --debug', 'Show debug information.')
+	.option('-d, --debug', 'Shows additional information for debugging purposes.')
 	.action(function (command) {
-		var configData = {
-			git: {},
-			jira: {},
-			slack: {},
-			options: {}
-		};
+		var questions = [
+			{
+				name: 'projectName',
+				message: 'What is the name of this project?',
+				default: 'Press enter to retrieve it from package.json.',
+				filter: function (name) {
+					return (!name || name === 'Press enter to retrieve it from package.json.') ? packageConfig.name : name;
+				}
+			},{
+				name: 'userName',
+				message: 'What is your name?',
+			},{
+				name: 'userEmail',
+				message: 'What is your default email address?',
+			},{
+				name: 'gitRepo',
+				message: 'Where is your project GitHub repo located?',
+				default: 'Press Enter to load from origin.',
+				filter: function (repo) {
+					var done = this.async();
+					repo = (repo !== 'Press Enter to load from origin.') ? repo : null;
 
-		if (command.debug) console.log('Debug mode detected.');
+					exec('git remote -v')
+					.then(function (gitResponse) {
+						var re = /^(?:origin\s*)(\S*)([\n\s]|.)*/;
+						done(gitResponse[0].replace(re, '$1'));
+					});
+				}
+			}, {
+				name: 'githubAccount',
+				message: 'What is your email address that is registered with GitHub?',
+				default: function (answers) {
+					return answers.userEmail;
+				}
+			}, {
+				name: 'gitDevBranch',
+				message: 'What is the name of your development branch?',
+				default: 'develop'
+			}, {
+				name: 'jiraDomain',
+				message: 'Where is your JIRA instance running? (You may simply paste in an entire URL.)',
+				filter: function (url) {
+					return url.replace(/^https?:\/\/([^\/]*)\/?.*$/, '$1');
+				}
+			}, {
+				name: 'jiraAccount',
+				message: 'What is the email address that is registered with JIRA?',
+				default: function (answers) {
+					return answers.userEmail;
+				}
+			}, {
+				name: 'jiraProject',
+				message: 'What is the JIRA project abbreviation?'
+			}, {
+				name: 'slackDomain',
+				message: 'What is your Slack team name? (You can find this in the top-left corner of Slack.)'
+			}, {
+				name: 'slackAccount',
+				message: 'What is your Slack username?',
+				filter: function (name) {
+					return name.replace(/^([^@])/, '@$1');
+				}
+			}, {
+				name: 'slackToken',
+				message: 'What is your slack API authentication token? (This will be safely stored in your secure keychain, and not your config file.)\n' +
+					'(Press enter to open the browser to open your browser to where you can find it.)',
+				filter: function (token) {
+					if (!token) exec('open https://api.slack.com/#auth');
+				}
+			}, {
+				name: 'slackToken2',
+				message: 'What is your slack API authentication token?',
+				when: function (answers) {
+					return !answers.slackToken;
+				}
+			}, {
+				name: 'slackChannel',
+				message: 'What slack channel or private group does your team use?',
+				filter: function (channel) {
+					return channel.replace(/^([^#])/, '#$1');
+				}
+			}, {
+				name: 'sign',
+				type: 'confirm',
+				message: 'Would you like to sign the package.json file as a contributor?',
+				default: true,
+			}, {
+				name: 'confirm',
+				type: 'confirm',
+				message: 'Does everything look okay?',
+				default: true
+			}
+		];
+
 		git.getRootDirectory()
 		.then(function (directory) {
 			if (command.debug) console.log('Project root directory: %s\nChecking for todo.config.', directory);
@@ -105,89 +185,41 @@ todo
 				throw new Error('Unknown project directory.');
 			}
 
-			return inquirer.ask('What is the name of this project? (Press enter to retrieve it from package.json.)');
-		}).then(function (projectName) {
-			configData.projectName = projectName || packageConfig.name;
-
-			if (command.debug) console.log('Using "%s".', configData.projectName);
-			return inquirer.ask('Where is your project git repo located? (Press Enter to load origin.)');
-		}).then(function (location) {
-			if (!location) {
-				return exec('git remote -v').then(function (gitResponse) {
-					var re = /^(?:origin\s*)(\S*)([\n\s]|.)*/;
-					return gitResponse[0].replace(re, '$1');
-				});
-			} else {
-				return location;
-			}
-		}).then(function (githubRepo) {
-			if (command.debug) console.log('Using "%s".', githubRepo);
-			configData.git.repo = githubRepo;
-			return inquirer.ask('What is your email address that is registered with GitHub?');
-		}).then(function (email) {
-			configData.git.account = email;
-
-			return inquirer.ask('What is the name of your development branch?', 'develop');
-		}).then(function (develop) {
-			configData.git.devBranch = develop;
-
-			return inquirer.ask('Where is your JIRA instance running? (You may simply paste in an entire URL.)');
-		}).then(function (url) {
-			configData.jira.domain = url.replace(/^https?:\/\/([^\/]*)\/?.*$/, '$1');
-
-			if (command.debug) console.log('Using "%s".', configData.jira.domain);
-
-			return inquirer.ask('What is the email address that is registered with JIRA? (Press enter if it is the same as GitHub.)');
-		}).then(function (email) {
-			configData.jira.account = email || configData.git.account;
-			return inquirer.ask('What is your Slack team name? (You can find this in the top-left corner of Slack.)');
-		}).then(function (slackTeam) {
-			configData.slack.domain = slackTeam + '.slack.com';
-			return inquirer.ask('What is your Slack username?');
-		}).then(function (username) {
-			configData.slack.account = username;
-			return inquirer.ask(
-				'What is your slack API authentication token? (This will be safely stored in your secure keychain, and not your config file.)\n' +
-				'(Press enter to open the browser to open your browser to where you can find it.)'
-			);
-		}).then(function (token){
-			if (!token) {
-				return exec('open https://api.slack.com/#auth').then(function () {
-					return inquirer.ask('What is your slack API authentication token?');
-				});
-			} else return (token);
-		}).then(function (token) {
-			console.log('Using "%s" as token.', token);
-			var keychainData = {
-				account: configData.slack.account,
-				service: 'todo-' + configData.projectName,
-				password: token
+			return inquirer.promptAsync(questions);
+		}).then(function (answers) {
+			if (command.debug) console.log('Processing answers.');
+			var configData = {
+				name: answers.projectName,
+				git: {
+					account: answers.githubAccount,
+					repo: answers.gitRepo,
+					devBranch: answers.gitDevBranch
+				},
+				jira: {
+					domain: answers.jiraDomain,
+					account: answers.jiraAccount,
+					project: answers.jiraProject
+				},
+				slack: {
+					domain: answers.slackDomain,
+					account: answers.slackAccount
+				},
+				user: {
+					name: answers.userName,
+					email: answers.userEmail,
+					signing: answers.sign
+				},
+				options: {
+					signed: false
+				}
 			};
-			return keychain.setPassword(keychainData);
-		}).then(function () {
-			return inquirer.ask('What slack channel or private group does your team use?');
-		}).then(function (channel) {
-			configData.slack.channel = channel;
-			return inquirer.ask('Would you like to sign the package.json file as a contributor? (Y/n) (Press enter for yes.)');
-		}).then(function (shouldSign) {
-			shouldSign = !shouldSign || !!shouldSign.match(/^\s*(y|yes)\b/i);
-			configData.options.sign = shouldSign;
-			if (shouldSign) configData.signed = false;
-			console.log(configData);
-			return inquirer.ask('Does everything look okay? (Y/n)');
-		}).then(function (okay) {
-			okay = !okay || !!okay.match(/^\s*(y|yes)\b/i);
-			if (!okay) {process.exit();}
 
-			fs.writeFileAsync(projectDirectory + '/todo.config', configData);
-		}).then(function () {
-			console.log('Configuration written successfully.');
-			process.exit();
-		}).catch(function (error) {
-			console.error('Something went wrong, and you will have to try again.').
-			process.exit(1);
+			return fs.writeFileAsync(projectDirectory + '/.todoconfig.json', JSON.stringify(configData, null, '\t'));
+		}).then(function (result) {
+			console.log('Configuration file sucessfully written.');
 		});
-	});
+
+	})
 ;
 
 todo
