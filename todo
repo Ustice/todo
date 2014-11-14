@@ -1,17 +1,24 @@
 #!/usr/bin/env node
 'use strict';
 
+// Configuration constansts
+var CONFIG_NAME = '.todoconfig.json'
+
+
 var Promise 			= require('bluebird');
-var config 				= require(__dirname + '/todo.config');
-var packageConfig = require(__dirname + '/package.json');
+
+var _							= require('lodash');
+var colors				= require('colors');
+var config 				= require(__dirname + '/' + CONFIG_NAME);
+var exec 					= Promise.promisify(require('child_process').exec);
 var fs 						= Promise.promisifyAll(require('fs'));
 var git 					= require(__dirname + '/lib/git');
 var inquirer			= require('inquirer');
-
-var exec 			= Promise.promisify(require('child_process').exec);
-var todo 			= require('commander');
-var keychain 	= require(__dirname + '/lib/keychain-promise');
-
+var keychain 			= require(__dirname + '/lib/keychain-promise');
+var packageConfig = require(__dirname + '/package.json');
+var todo 					= require('commander');
+var JiraApi				= require(__dirname + '/lib/jira');
+// var JiraApi = require('jira').JiraApi;
 
 // var githubKeychain = {
 // 	account: config.github.login,
@@ -19,7 +26,7 @@ var keychain 	= require(__dirname + '/lib/keychain-promise');
 // 	type: 'internet'
 // };
 
-inquirer.promptAsync = function inquirer$promptAsync (questions) {
+inquirer.promptAsync = function inquirer__promptAsync (questions) {
 	return new Promise(function (resolve, reject) {
 		inquirer.prompt(questions, function (answers) {
 			resolve(answers);
@@ -27,7 +34,7 @@ inquirer.promptAsync = function inquirer$promptAsync (questions) {
 	});
 };
 
-inquirer.confirm = function inquirer$confirm (query) {
+inquirer.confirm = function inquirer__confirm (query) {
 	return new Promise(function (resolve, reject) {
 		var question = {
 			name: 'confirm',
@@ -105,7 +112,17 @@ todo
 				name: 'jiraDomain',
 				message: 'Where is your JIRA instance running? (You may simply paste in an entire URL.)',
 				filter: function (url) {
-					return url.replace(/^https?:\/\/([^\/]*)\/?.*$/, '$1');
+					var parsedUrl = url.match(/^(https?):\/\/([^\/:]*)(:[^\/]*)?/);
+					console.log(parsedUrl)
+					var parsedUrl = {
+						transport: parsedUrl[1],
+						domain: parsedUrl[2],
+						port: parsedUrl[3]
+					};
+
+					answers.jiraTransport = parsedUrl.transport;
+					answers.jiraPort = parsedUrl.port;
+					return parsedUrl.domain;
 				}
 			}, {
 				name: 'jiraAccount',
@@ -196,6 +213,8 @@ todo
 					devBranch: answers.gitDevBranch
 				},
 				jira: {
+					transport: answers.jiraTransport,
+					port: answers.jiraPort ? parseInt(answers.jiraPort, 10) : (answers.jiraTransport.match('https') ? 443 : 80),
 					domain: answers.jiraDomain,
 					account: answers.jiraAccount,
 					project: answers.jiraProject
@@ -214,7 +233,7 @@ todo
 				}
 			};
 
-			return fs.writeFileAsync(projectDirectory + '/.todoconfig.json', JSON.stringify(configData, null, '\t'));
+			return fs.writeFileAsync(projectDirectory + '/' + CONFIG_NAME, JSON.stringify(configData, null, '\t'));
 		}).then(function (result) {
 			console.log('Configuration file sucessfully written.');
 		});
@@ -232,6 +251,75 @@ todo
 	.action(function () {
 		var args = Array.prototype.slice.call(arguments);
 		var command = args.pop();
+		var jiraAuth;
+		var jiraConfig;
+		var jira
+
+		// Authenticate
+
+		loadConfig().catch(function (error) {
+			console.error('Unable to read your config file. Please check that you have set one up. If not try running "todo init".\n%s', error);
+		}).then(function (config) {
+			config = config.jira;
+
+			jiraConfig = config;
+			jiraAuth = {
+				account: config.account,
+				service: config.domain,
+				type: 'internet'
+			};
+
+			return keychain.getPassword(jiraAuth);
+		})
+		.catch(function (error) {
+			console.error('Unable to retrieve your JIRA password. %s', error);
+			process.exit(1);
+		}).then(function (password) {
+			jiraAuth.password = password;
+			jiraConfig.password = password;
+
+			jira = new JiraApi(jiraConfig);
+
+			console.log('Checking with JIRA...');
+
+			jira.list(jiraConfig).then(function (response, data) {
+				var issues = _.map(response.body.issues, function (issue) {
+					return {
+						id: issue.id,
+						key: issue.key,
+						link: issue.self,
+						summary: issue.fields.summary,
+						priority: issue.fields.priority.name,
+						dueDate: issue.fields.duedate,
+						issueType: issue.fields.issuetype.name
+					};
+				});
+
+				var keyLengths = _.map(issues, function (issue) {
+					return issue.key.length;
+				});
+
+				var keyLengthMax = _.max(keyLengths);
+
+				var formatted = issues.length && _.map(issues, function (issue) {
+					return [
+						priorityColor(issue.key, issue.priority),
+						': ',
+						_.map(new Array(keyLengthMax - issue.key.length), function () {return ' ';}).join(''),
+						issue.summary
+					].join('');
+				}).join('\n');
+
+				formatted = formatted || 'No issues found.'
+
+				console.log(formatted);
+
+			}).catch(function (error) {
+				console.error('There was an error', error);
+			});
+
+		});
+
 
 		if (command.all) console.log('Listing all tasks.');
 		if (command.available) console.log('Listing all available lists');
@@ -264,3 +352,34 @@ todo
 ;
 
 todo.parse(process.argv);
+
+function loadConfig () {
+	var fullFileName;
+	return git.getRootDirectory().then(function (directory) {
+		fullFileName = directory + '/' + CONFIG_NAME;
+		return fs.readFileAsync(fullFileName);
+	}).then(function (config) {
+		return JSON.parse(config.toString());
+	}).catch(function (error) {
+		console.error('Error reading config file, "%s".', fullFileName);
+	});
+}
+
+function priorityColor (text, priority) {
+	switch (priority) {
+		case 'Blocker':
+			return text.bold.magenta;
+		case 'Showstopper':
+			return text.bold.red;
+		case 'Critical':
+			return text.bold.yellow;
+		case 'Major':
+			return text.bold.cyan;
+		case 'Minor':
+			return text.bold.blue;
+		case 'Trivial':
+			return text.white;
+		case 'Unknown':
+			return text.bold.gray;
+	}
+}
