@@ -249,7 +249,7 @@ todo
 	.option('--done', 			'Includes tasks that are complete.')
 	.option('--unassigned', 'Lists all tasks that are unassigned')
 	.action(function () {
-		var args = Array.prototype.slice.call(arguments);
+		var args = Array.prototype.slice.call(arguments, 0);
 		var command = args.pop();
 		var jiraAuth;
 		var jiraConfig;
@@ -278,12 +278,21 @@ todo
 			jiraAuth.password = password;
 			jiraConfig.password = password;
 
+			jiraConfig.options = {
+				all: command.all || false,
+				available: command.available || false,
+				done: command.done || false,
+				unassigned: command.unassigned || false
+			};
+
 			jira = new JiraApi(jiraConfig);
 
 			console.log('Checking with JIRA...');
 
 			jira.list(jiraConfig).then(function (response, data) {
 				var issues = _.map(response.body.issues, function (issue) {
+					// console.log(issue);
+
 					return {
 						id: issue.id,
 						key: issue.key,
@@ -291,7 +300,8 @@ todo
 						summary: issue.fields.summary,
 						priority: issue.fields.priority.name,
 						dueDate: issue.fields.duedate,
-						issueType: issue.fields.issuetype.name
+						issueType: issue.fields.issuetype.name,
+						status: issue.fields.status.name
 					};
 				});
 
@@ -306,7 +316,10 @@ todo
 						priorityColor(issue.key, issue.priority),
 						': ',
 						_.map(new Array(keyLengthMax - issue.key.length), function () {return ' ';}).join(''),
-						issue.summary
+						'[',
+						issue.status,
+						'] ',
+						statusColor(issue.summary, issue.status)
 					].join('');
 				}).join('\n');
 
@@ -381,5 +394,21 @@ function priorityColor (text, priority) {
 			return text.white;
 		case 'Unknown':
 			return text.bold.gray;
+	}
+}
+
+function statusColor (text, status) {
+	switch (status) {
+		case 'In Progress':
+			return text.bold;
+		case 'Dev Complete':
+			return text.underline;
+		case 'Awaiting Review':
+			return text.gray;
+		case 'Bug Invalid':
+		case 'Closed':
+			return text.underline.gray;
+		default:
+			return text;
 	}
 }
