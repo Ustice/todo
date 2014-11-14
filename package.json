@@ -23,12 +23,14 @@
   },
   "homepage": "https://github.com/Ustice/todo",
   "dependencies": {
-    "commander": "~2.3.0",
     "bluebird": "~2.2.2",
-    "jira": "~0.10.0",
+    "colors": "^1.0.3",
+    "commander": "~2.3.0",
     "github": "~0.2.1",
+    "inquirer": "~0.5.1",
+    "jira": "~0.10.0",
     "keychain": "0.0.4",
     "lodash": "~2.4.1",
-    "inquirer": "~0.5.1"
-  }
+    "request": "~2.39.0"
+  },
 }
