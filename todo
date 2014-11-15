@@ -305,20 +305,23 @@ todo
 					};
 				});
 
-				var keyLengths = _.map(issues, function (issue) {
-					return issue.key.length;
-				});
+				var keyMaxLength = 0;
+				var statusMaxLength = 0;
 
-				var keyLengthMax = _.max(keyLengths);
+				_.each(issues, function (issue) {
+					keyMaxLength = Math.max(issue.key.length, keyMaxLength);
+					statusMaxLength = Math.max(issue.status.length, statusMaxLength);
+				});
 
 				var formatted = issues.length && _.map(issues, function (issue) {
 					return [
 						priorityColor(issue.key, issue.priority),
 						': ',
-						_.map(new Array(keyLengthMax - issue.key.length), function () {return ' ';}).join(''),
+						padSpaces(issue.key, keyMaxLength),
 						'[',
 						issue.status,
 						'] ',
+						padSpaces(issue.status, statusMaxLength),
 						statusColor(issue.summary, issue.status)
 					].join('');
 				}).join('\n');
@@ -329,6 +332,7 @@ todo
 
 			}).catch(function (error) {
 				console.error('There was an error', error);
+				throw error;
 			});
 
 		});
@@ -411,4 +415,9 @@ function statusColor (text, status) {
 		default:
 			return text;
 	}
+}
+
+function padSpaces (text, maxLength) {
+	if (text.length === maxLength) return '';
+	return _.map(new Array(maxLength - text.length), function () {return ' ';}).join('');
 }
